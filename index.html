@@ -521,22 +521,39 @@ function startListening(){
 function stopListening(){wake=false;if(dict){try{dict.stop()}catch(e){}}if(rec){const r=rec;rec=null;try{r.abort()}catch(e){}}$('#bar').classList.remove('listen');renderChips()}
 function startSR(){
  try{const r=new SRC();rec=r;r.lang=lang==='nl'?'nl-NL':'en-US';r.interimResults=true;r.continuous=true;r.maxAlternatives=1;
-  r.onresult=e=>{for(let i=e.resultIndex;i<e.results.length;i++){const x=e.results[i];heard(x[0].transcript.trim(),x.isFinal)}};
+  r.onresult=e=>{for(let i=e.resultIndex;i<e.results.length;i++){const x=e.results[i];heard(x[0].transcript.trim(),x.isFinal,i)}};
   r.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed'){wake=false;rec=null;micMsg('x');renderChips()}};
   r.onend=()=>{if(wake&&rec===r)setTimeout(()=>{if(wake&&rec===r)startSR()},300)};
   r.start()}catch(e){wake=false;rec=null;micMsg('x')}}
-function heard(text,final){
+const MAX_SILENCE=3000,AFTER_FINAL=900;
+let skipIdx=-1,skipRaw='',lastIdx=-1,lastRaw='';
+function samePrefix(a,b){a=a.toLowerCase();b=b.toLowerCase();const n=Math.min(8,a.length,b.length);return n>0&&a.slice(0,n)===b.slice(0,n)}
+function armSilence(ms){clearTimeout(silence);silence=setTimeout(()=>autoSubmit(),ms)}
+/* Submit after silence: ignore the rest of the segment that was just sent, so it does not trigger "Hey Wae" a second time */
+function autoSubmit(){skipIdx=lastIdx;skipRaw=lastRaw;submitBar()}
+function heard(text,final,idx){
  if(!text)return;
+ const hasIdx=typeof idx==='number';
+ /* still the same (already submitted) utterance? then ignore until it is finished */
+ if(skipRaw){
+  const same=hasIdx?idx<=skipIdx:samePrefix(text,skipRaw);
+  if(same){if(final){skipRaw='';skipIdx=-1}return}
+  skipRaw='';skipIdx=-1}
+ lastIdx=hasIdx?idx:-1;lastRaw=text;
  if(barOpen){
   text=text.replace(WAKE0,'').trim();if(!text)return;
-  $('#q').value=((finalText?finalText+' ':'')+text).trim();clearTimeout(silence);
-  if(final){finalText=$('#q').value;silence=setTimeout(submitBar,900)}
+  $('#q').value=((finalText?finalText+' ':'')+text).trim();
+  if(final){finalText=$('#q').value;armSilence(AFTER_FINAL)}
+  else armSilence(MAX_SILENCE);   /* max 3 s silence, no waiting for the final result */
   return}
- if(!final)return;
+ /* "Hey Wae" is also recognised on partial results: no waiting for the recogniser to finish the sentence */
  const m=text.match(WAKE);if(!m)return;
- showBar();const rest=text.slice(m.index+m[0].length).trim();
- if(rest){$('#q').value=rest;finalText=rest;clearTimeout(silence);silence=setTimeout(submitBar,500)}}
-function submitBar(){const v=$('#q').value;if(!v.trim())return;clearTimeout(silence);command(v)}
+ const rest=text.slice(m.index+m[0].length).trim();
+ if(!final&&!rest)return;          /* partial "hey we..." could still become another word */
+ showBar();
+ if(rest){$('#q').value=rest;finalText=final?rest:'';armSilence(final?500:MAX_SILENCE)}
+ else armSilence(MAX_SILENCE)}
+function submitBar(){const v=$('#q').value;clearTimeout(silence);if(!v.trim())return;command(v)}
 $('#q').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();submitBar()}else if(e.key==='Escape')closeBar()});
 $('#q').addEventListener('input',()=>{finalText=$('#q').value});
 function openFromHome(){if(screen!=='s-clock')return;if(barOpen){closeBar();return}showBar();if(!wake)startListening()}
